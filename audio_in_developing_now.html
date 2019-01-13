@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<html>
+<head>
+    <meta charset=utf-8"/>
+    <!-- scripts -->
+    <script src="assets/js/jquery.min.js"></script>
+    <script src="assets/js/FileSaver.js"></script>
+    <script src="assets/js/meyda/meyda.min.js"></script>
+    <script src="assets/js/p5/p5.min.js"></script>
+    <script src="assets/js/p5/addons/p5.dom.min.js"></script>
+    <script src="assets/js/math.js"></script>
+
+    <button onclick="exportArray()">Export Data</button>
+    <label id="speech_non_speech">test</label>    
+</head>
+<body>
+
+<script>
+// User defined variables
+var buffer_size = 2048; //Buffer size must be a power of 2, e.g. 64 or 512
+var sample_rate = 44100; //16000, 22050, 44100
+var num_features = 19; // must be consistant with "featureExtractors", length of mfcc=13
+var num_statistics = 6;// must be consistant with "mtFeatureExtraction"
+
+// setup global variables
+
+// global variables
+var mfcc = [0,0,0,0,0,0,0,0,0,0,0,0,0];
+var rms = 0; var zcr = 0; var energy = 0; var spectralCentroid = 0;
+var spectralSpread = 0; var spectralFlux = 0; var spectralRolloff = 0; 
+var listening = false
+var data = [];  // save all short-term  features
+var stData = Create2DArray(num_features); // save all st-term features, # of features
+var mtData = Create2DArray(num_features*num_statistics);// save all mid-term features, # of features * # of statistics
+var silence = true; mtCount = 0; mtColCount = 0; stColCount =0;
+var threshold = 0.001; // threshold on rms value
+
+navigator.getUserMedia = (
+    navigator.getUserMedia ||
+    navigator.webkitGetUserMedia ||
+    navigator.mozGetUserMedia ||
+    navigator.msGetUserMedia
+);
+
+function setup() {
+    // initializations
+    label_text('speech_non_speech', 'noise')
+    window.AudioContext = window.AudioContext || window.webkitAudioContext
+    var context = new AudioContext()
+    var source = null
+    var startButton = null
+    var stopButton = null
+
+    // canvas setup
+    createCanvas(1500, 300)
+    background(245)
+
+    // initialize data array
+    data.push(
+        'rms' + ',' + 'zcr' + ','  + 'energy' + ',' + 'spectralCentroid' + ','
+        + 'spectralSpread' + ',' + 'spectralRolloff' + ',' +'mfcc' + '\n' );
+
+    // get microphone
+    navigator.getUserMedia({audio:true, video:false},function(stream){
+        // get audio stream data
+        source = context.createMediaStreamSource(stream)
+
+        // analyser setup
+        meydaAnalyzer = Meyda.createMeydaAnalyzer({
+            'audioContext':context,
+            'source':source,
+            'bufferSize':buffer_size,// Buffer Size tells Meyda how often to check the audio feature, and is measured in Audio Samples. Usually there are 44100 Audio Samples in 1
+  // second, which means in this case Meyda will calculate the level about 86
+  // (44100/512) times per second.
+            'sampleRate':sample_rate,
+            'featureExtractors':['rms','zcr','energy', 'spectralCentroid',
+            'spectralSpread','spectralRolloff','mfcc'], // define feature to extract here
+  // Finally, we provide a function which Meyda will call every time it
+  // calculates a new level. This function will be called around 86 times per
+  // second.
+            'callback':show
+        })
+
+        // buttons
+        startButton = createButton('Start')
+        startButton.mousePressed(function(){
+        	context.resume(); //make it work in Firefox
+            // start audio analyzer
+            if(listening == false){
+                meydaAnalyzer.start() 
+                listening = true
+                startButton.html('Stop')
+                startButton.style('background:#aa0')
+            }else{
+                meydaAnalyzer.stop()
+                listening = false
+                startButton.html('Start')
+                startButton.style('background:#aaf')
+            }
+        })
+
+    },function(error){
+        console.log(error)
+    })
+}
+
+function show(features){ // show function was called each time data was updated
+    background(245)
+    rms = features['rms'] ;// [0,1], 0.0 is not loud and 1.0 is very loud.
+    zcr = features['zcr'] / buffer_size *2 ; // Range: [0, ((buffer size / 2) - 1)] / bufferSize *2
+    energy = features['energy'] / buffer_size ; // Range: [0 - bufferSize] / bufferSize
+    spectralCentroid = features['spectralCentroid']/buffer_size *2 // An indicator of the “brightness” of a given sound// [0 - half of the FFT size] / bufferSize *2
+    spectralSpread = features['spectralSpread']/buffer_size*2 // Can be used to differentiate between noisy (high spectral spread) and pitched sounds (low spectral spread). // [ 0 - half of the FFT size] / bufferSize *2
+    spectralRolloff = features['spectralRolloff']/sample_rate*2 // [0 - half of the sampling rate] /
+    mfcc = features['mfcc'] //Often used to perform voice activity detection (VAD) prior to automatic speech recognition (ASR)
+    
+    // print data
+    text("rms: " + rms,20,20);
+    text("zcr: " + zcr,20,40);
+    text("energy :" + energy,20,60);
+    text("spectralCentroid: " + spectralCentroid,20,80);
+    text("spectralSpread: " + spectralSpread,20,100);
+    text("spectralRolloff: " + spectralRolloff,20,120);
+    text("mfcc (length=13) : \n" + mfcc,20,140);
+
+    if(rms>threshold)
+    {
+        mtCount = mtCount + buffer_size; // need to renew every sample_rate 
+        data.push(
+        rms.toString() + ',' + zcr.toString() + ',' 
+        + energy.toString() + ',' + spectralCentroid.toString() + ','
+        + spectralSpread.toString() + ',' + spectralRolloff.toString() + ','
+        + mfcc.join(',') + '\n' ); // num.tostring(); array.join
+
+        // save data and calculate statistics
+        stFeatureSave();
+        if (mtCount>sample_rate)            
+        {
+        for (var i = 0; i < num_features; i++) 
+            {
+            mtFeatureExtraction(stData[i],i);
+            }
+
+        // decision speech/non-speech according to audio mtFeatures
+        Tree_decision2();
+
+        // renew related parameters
+        stData= Create2DArray(num_features);; // blank stData
+        stColCount = 0; //black stColCount
+        mtColCount++; // add another column
+        mtCount = mtCount - sample_rate;
+        }
+    }
+    else // show noise
+    {
+        label_text('speech_non_speech', 'noise')
+    }
+} // end show function
+
+function Tree_decision()
+{
+        console.log("called Tree_decision");
+        if (mtData[33][mtColCount] > 0.3617)
+        {
+            label_text('speech_non_speech', 'speech');
+        } 
+        else 
+            {
+                if (mtData[3][mtColCount] < 0.01217) 
+                {
+                    label_text('speech_non_speech', 'noise');
+                }
+                else
+                    {
+                        if (mtData[19][mtColCount] < 0.03234)
+                        {
+                            label_text('speech_non_speech', 'noise');
+                        }
+                        else
+                            {
+                                if (mtData[8][mtColCount] < 0.1226)
+                                {
+                                    label_text('speech_non_speech', 'noise');
+                                }
+                                else
+                                {
+                                    label_text('speech_non_speech', 'speech');
+                                }
+                            }
+                    }
+             }
+}
+
+function Tree_decision2()
+{
+    console.log("called Tree_decision2");
+        if (mtData[85][mtColCount] > -5.501)
+        {
+            if (mtData[60][mtColCount] < 1.993)
+            {
+                label_text('speech_non_speech', 'speech');
+            }    
+            else 
+            {
+                label_text('speech_non_speech', 'noise');
+            }
+        } 
+        else 
+        {
+            if (mtData[69][mtColCount] > -0.5978)
+            {
+                label_text('speech_non_speech', 'speech');
+            }
+            else
+            {
+                label_text('speech_non_speech', 'noise');
+            }
+        }
+}
+
+function stFeatureSave()
+{ // the sequence must exactly the same as show()
+        stData[0][stColCount] = rms;
+        stData[1][stColCount] = zcr;
+        stData[2][stColCount] = energy;
+        stData[3][stColCount] = spectralCentroid;
+        stData[4][stColCount] = spectralSpread;
+        stData[5][stColCount] = mfcc[0];
+        for (var i = 6; i < num_features; i++) {
+             stData[i][stColCount] = mfcc[i-6];
+        }
+        stColCount++;
+}
+
+function mtFeatureExtraction(stFeature,index)
+{ // get max, min, mean, median, std, std / mean
+        mtData[index*num_statistics][mtColCount] =  math.max(stFeature) ; // cannot use push
+        mtData[index*num_statistics+1][mtColCount] =  math.min(stFeature) ;
+        mtData[index*num_statistics+2][mtColCount] =  math.mean(stFeature);
+        mtData[index*num_statistics+3][mtColCount] =  math.median(stFeature); 
+        mtData[index*num_statistics+4][mtColCount] =  math.std(stFeature);
+        mtData[index*num_statistics+5][mtColCount] =  
+                                    mtData[4][mtColCount]  / (mtData[2][mtColCount] + 1e-10);
+}
+
+function exportArray() {
+  const blob = new Blob(data, {type: "text/csv;charset=utf-8"});
+  window.saveAs(blob, `all_features-${ new Date() }.csv`);
+  //save(mtData, 'mtData.csv')
+}
+
+function Create2DArray(rows) 
+{ // you only need to care about # of rows, create a 2D array
+  var arr = [];
+  for (var i=0;i<rows;i++) 
+  {
+     arr[i] = [];
+  }
+  return arr;
+}
+
+function label_text(ID, text)
+{
+    var elem = document.getElementById(ID);
+    elem.style.fontSize = "xx-large";
+    elem.innerHTML = text;
+}
+
+</script>
+
+</body>
+</html>

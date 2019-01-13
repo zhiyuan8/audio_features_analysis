@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <title>load files</title>
+    <meta charset="utf-8">
+    
+    <script src="assets/js/meyda/meyda.min.js"></script>
+    <script src="assets/js/FileSaver.js"></script>
+    <script src="assets/js/p5/p5.min.js"></script>
+    <script src="assets/js/math.js"></script>
+    <script src="assets/js/p5/addons/p5.dom.min.js"></script>
+
+    <button onclick="exportArray()">Export Data</button>
+  </head>  
+  <body>
+    <audio
+           controls
+           crossorigin="anonymous"
+           id="audio"
+           src="audios/speech/speech-088.wav">
+    </audio>
+
+<script>
+
+// User defined variables
+var buffer_size = 2048; //Buffer size must be a power of 2, e.g. 64 or 512
+var sample_rate = 44100; //16000, 22050, 44100
+var num_features = 19; // must be consistant with "featureExtractors", length of mfcc=13
+var num_statistics = 6;// must be consistant with "mtFeatureExtraction"
+
+// global variables
+var mfcc = [0,0,0,0,0,0,0,0,0,0,0,0,0]
+var save_raw_audio=[]; //save raw audio wave
+var save_raw_FFT = [];   // save raw FFT result
+var rms = 0; var zcr = 0; var energy = 0; var spectralCentroid = 0;
+var spectralSpread = 0; var spectralFlux = 0; var spectralRolloff = 0; 
+var data = [];  // save all short-term  features
+var stData = Create2DArray(num_features); // save all st-term features, # of features
+var mtData = Create2DArray(num_features*num_statistics);// save all mid-term features, # of features * # of statistics
+var silence = true; mtCount = 0; mtColCount = 0; stColCount =0;
+var threshold = 0.002; // threshold on rms value
+
+function setup() {
+    // canvas setup
+    createCanvas(1500, 200)
+    background(245)
+    const audioContext = new AudioContext();
+    const htmlAudioElement = document.getElementById("audio");
+    const source = audioContext.createMediaElementSource(htmlAudioElement);
+    source.connect(audioContext.destination);
+    data.push(
+        'rms' + ',' + 'zcr' + ','  + 'energy' + ',' + 'spectralCentroid' + ','
+        + 'spectralSpread' + ',' + 'spectralRolloff' + ',' + 'mfcc'+ '\n' ); // save labels
+    const analyzer = Meyda.createMeydaAnalyzer({
+        "audioContext": audioContext,
+        "source": source,
+        "bufferSize": buffer_size, // minimal:128
+  // Buffer Size tells Meyda how often to check the audio feature, and is
+  // measured in Audio Samples. Usually there are 44100 Audio Samples in 1
+  // second, which means in this case Meyda will calculate the level about 86
+  // (44100/2048=21.5) times per second.
+        "sampleRate":sample_rate,
+        "featureExtractors": ['rms','zcr','energy', 'spectralCentroid',
+            'spectralSpread','spectralRolloff','mfcc','buffer','amplitudeSpectrum'],
+        "callback": show
+});
+    analyzer.start(); // analyzer is not a global variable
+}
+
+function show(features) 
+{ // show function was called each time data was updated
+    background(245)
+
+    rms = features['rms'] ;// [0,1], 0.0 is not loud and 1.0 is very loud.
+    zcr = features['zcr'] / buffer_size *2 ; // Range: [0, ((buffer size / 2) - 1)] / bufferSize *2
+    energy = features['energy'] / buffer_size ; // Range: [0 - bufferSize] / bufferSize
+    spectralCentroid = features['spectralCentroid']/buffer_size *2 // An indicator of the “brightness” of a given sound// [0 - half of the FFT size] / bufferSize *2
+    spectralSpread = features['spectralSpread']/buffer_size*2 // Can be used to differentiate between noisy (high spectral spread) and pitched sounds (low spectral spread). // [ 0 - half of the FFT size] / bufferSize *2
+    spectralRolloff = features['spectralRolloff'] / sample_rate*2 // [0 - half of the sampling rate] /  sampleRate *2
+    mfcc = features['mfcc'] //Often used to perform voice activity detection (VAD) prior to automatic speech recognition (ASR).
+
+    // if valid sound frame recieved add to data
+    if(rms>threshold)
+    {
+    	save_raw_audio.push(features['buffer']) // An array of size bufferSize, where each value can range between -1.0 - 1.0.
+    	save_raw_FFT.push(features['amplitudeSpectrum']) //An array half the size of the FFT, containing information about frequencies between 0 - half of the sampling rate.
+    	mtCount = mtCount + buffer_size; // need to renew every sample_rate 
+        data.push(
+        rms.toString() + ',' + zcr.toString() + ',' 
+        + energy.toString() + ',' + spectralCentroid.toString() + ','
+        + spectralSpread.toString() + ',' + spectralRolloff.toString() + ','
+    	+ mfcc.join(',') + '\n' ); // num.tostring(); array.join
+
+        // save data and calculate statistics
+		stFeatureSave();
+
+		if (mtCount>sample_rate)			
+		{
+			for (var i = 0; i < num_features; i++) 
+			{
+				mtFeatureExtraction(stData[i],i);
+			}
+			stData= Create2DArray(num_features);; // blank stData
+			stColCount = 0; //black stColCount
+			mtColCount++; // add another column
+			mtCount = mtCount - sample_rate;
+      	}
+    }
+    // print data
+    text("rms: " + rms,20,20);
+    text("zcr: " + zcr,20,40);
+    text("energy :" + energy,20,60);
+    text("spectralCentroid: " + spectralCentroid,20,80);
+    text("spectralSpread: " + spectralSpread,20,100);
+    text("spectralRolloff: " + spectralRolloff,20,140);
+    text("mfcc (length=13) : \n" + mfcc,20,180);
+} // end show function
+
+function stFeatureSave()
+{ // the sequence must exactly the same as show()
+		stData[0][stColCount] = rms;
+        stData[1][stColCount] = zcr;
+        stData[2][stColCount] = energy;
+        stData[3][stColCount] = spectralCentroid;
+        stData[4][stColCount] = spectralSpread;
+        stData[5][stColCount] = spectralRolloff;
+        for (var i = 6; i < num_features; i++) {
+        	 stData[i][stColCount] = mfcc[i-6];
+        }
+        stColCount++;
+}
+
+function mtFeatureExtraction(stFeature,index)
+{ // get max, min, mean, median, std, std / mean
+		mtData[index*num_statistics][mtColCount] =  math.max(stFeature) ; // cannot use push
+		mtData[index*num_statistics+1][mtColCount] =  math.min(stFeature) ;
+		mtData[index*num_statistics+2][mtColCount] =  math.mean(stFeature);
+		mtData[index*num_statistics+3][mtColCount] =  math.median(stFeature); 
+		mtData[index*num_statistics+4][mtColCount] =  math.std(stFeature);
+		mtData[index*num_statistics+5][mtColCount] =  
+							mtData[4][mtColCount]  / (mtData[2][mtColCount] + 1e-10);
+}
+
+function exportArray() 
+{
+	save(mtData, 'mtData.txt')
+  //const blob = new Blob(mtData, {type: "text/csv;charset=utf-8"});
+  //window.saveAs(blob, `all_features-${ new Date() }.csv`);
+  //const blob2 = new Blob(all_raw_audio, {type: "text/csv;charset=utf-8"});
+  //window.saveAs(blob2, `raw_audio-${ new Date() }.csv`);
+  //const blob3 = new Blob(all_raw_FFT, {type: "text/csv;charset=utf-8"});
+  //window.saveAs(blob3, `raw_FFT-${ new Date() }.csv`);
+}
+
+function Create2DArray(rows) 
+{ // you only need to care about # of rows, create a 2D array
+  var arr = [];
+  for (var i=0;i<rows;i++) 
+  {
+     arr[i] = [];
+  }
+  return arr;
+}
+
+</script>
+  </body>
+</html>
