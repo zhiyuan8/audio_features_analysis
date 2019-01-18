@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<html>
+
+<head>
+
+    <title>microphone in</title>
+    <meta charset=utf-8"/>
+    <!-- scripts -->
+    <script src="assets/js/jquery.min.js"></script>
+    <script src="assets/js/FileSaver.js"></script>
+    <script src="assets/js/meyda/meyda.min.js"></script>
+    <script src="assets/js/p5/p5.min.js"></script>
+    <script src="assets/js/p5/addons/p5.dom.min.js"></script>
+    <script src="assets/js/math.js"></script>
+
+    <button onclick="exportArray()">Export Data</button>
+    <label id="speech_non_speech">test</label>
+    <label id="speech_score">0</label>      
+
+</head>
+
+<body onload="timeClock()">
+    <div id="txt"></div>
+
+<script>
+
+// User defined variables
+var buffer_size = 2048; //Buffer size must be a power of 2, e.g. 64 or 512
+var sample_rate = 44100; //16000, 22050, 44100
+var num_features = 19; // must be consistant with "featureExtractors", length of mfcc=13
+var num_statistics = 6;// must be consistant with "mtFeatureExtraction"
+var k=20; // k parameter for kNN model
+var threshold = 0.02; // threshold on max(rms) value to detect silence
+
+// global variables
+var path1 = 'speech.csv'; // speech label = 1
+var path2 = 'noise.csv'; // noise label = 0
+var mtMaxCol = 10; // mtData at most have 10 columns
+var mfcc = [0,0,0,0,0,0,0,0,0,0,0,0,0]
+var rms = 0; var zcr = 0; var energy = 0; var spectralCentroid = 0;
+var spectralSpread = 0; var spectralFlux = 0; var spectralRolloff = 0; 
+var stData = Create2DArray(num_features); // save all st-term features, # of features
+var mtData_normalized = Create2DArray(num_features*num_statistics); // used in calculation
+var mtData = Create2DArray(num_features*num_statistics);// save all mid-term features, # of features * # of statistics
+var mtCount = 0; mtColCount = 0; stColCount =0;
+var labels = []; // 0 for noise, 1 for speech
+var loadData, rowCount,  colCount;
+var playing = false;
+var score = 0; // 0: noise; 1: speech
+var dist,indices,normalize_mean,normalize_std; // used in kNN model
+// Standardization:  make features to have zero-mean and unit-variance.
+var timeCount = 0;
+var myVar; // used in setInterval
+
+// global parameters only in this file
+var listening = false;
+
+navigator.getUserMedia = (
+    navigator.getUserMedia ||
+    navigator.webkitGetUserMedia ||
+    navigator.mozGetUserMedia ||
+    navigator.msGetUserMedia
+);
+
+function preload() // data read-in
+{
+    //my table is comma separated value "csv", and don't need a header specifying the columns labels
+    table1 = loadTable(path1, 'csv'); // speech,label-1
+    table2 = loadTable(path2, 'csv'); // noise, remember the size must exactly same as 
+    //speech csv, label-2
+}
+
+function setup() {
+    // initializations
+    label_text('speech_non_speech', 'noise')
+    label_text('speech_score', '0')
+    loadcsv(table1, table2); // load 2 csv files
+
+    // canvas setup
+    createCanvas(1500, 300)
+    background(245)
+
+    // predefine 2 arrays used in kNN model
+    dist = new Array(rowCount);
+    indices = new Array(rowCount);
+
+    window.AudioContext = window.AudioContext || window.webkitAudioContext
+    var context = new AudioContext()
+    var source = null
+    var startButton = null
+    var stopButton = null
+
+    // get microphone
+    navigator.getUserMedia({audio:true, video:false},function(stream){
+    // get audio stream data
+    source = context.createMediaStreamSource(stream)
+
+    // analyser setup
+    meydaAnalyzer = Meyda.createMeydaAnalyzer({
+            'audioContext':context,
+            'source':source,
+            'bufferSize':buffer_size,// Buffer Size tells Meyda how often to check the audio feature, and is measured in Audio Samples. Usually there are 44100 Audio Samples in 1
+  // second, which means in this case Meyda will calculate the level about 86
+  // (44100/512) times per second.
+            'sampleRate':sample_rate,
+            'featureExtractors':['rms','zcr','energy', 'spectralCentroid','spectralFlatness','spectralSlope',
+            'spectralSpread','spectralRolloff','spectralSkewness','spectralKurtosis','mfcc'], // define feature to extract here
+  // Finally, we provide a function which Meyda will call every time it
+  // calculates a new level. This function will be called around 86 times per
+  // second.
+            'callback':show
+        })
+
+    // buttons
+    startButton = createButton('Start')
+    startButton.mousePressed(function(){
+    context.resume(); //make it work in Firefox
+    // start audio analyzer
+    if(listening == false)
+    {
+                meydaAnalyzer.start() 
+                listening = true
+                startButton.html('Pause')
+                startButton.style('background:#aa0')
+                myVar = setInterval( make_decision, 1000 ); 
+                // make_decision is a function that I will call
+    }
+    else
+    {
+                meydaAnalyzer.stop()
+                listening = false
+                startButton.html('Start')
+                startButton.style('background:#aaf')
+                clearInterval(myVar); // stop setInterval
+    }
+    })
+
+    },function(error){
+        console.log(error)
+    })
+}
+
+function show(features){ // show function was called each time data was updated
+    background(245)
+    rms = features['rms'] ;// [0,1], 0.0 is not loud and 1.0 is very loud.
+    zcr = features['zcr'] / buffer_size *2 ; // Range: [0, ((buffer size / 2) - 1)] / bufferSize *2
+    energy = features['energy'] / buffer_size ; // Range: [0 - bufferSize] / bufferSize
+    spectralCentroid = features['spectralCentroid']/buffer_size *2 // An indicator of the “brightness” of a given sound// [0 - half of the FFT size] / bufferSize *2
+    spectralSpread = features['spectralSpread']/buffer_size*2 // Can be used to differentiate between noisy (high spectral spread) and pitched sounds (low spectral spread). // [ 0 - half of the FFT size] / bufferSize *2
+    spectralRolloff = features['spectralRolloff']/sample_rate*2 // [0 - half of the sampling rate] /
+    mfcc = features['mfcc'] //Often used to perform voice activity detection (VAD) prior to automatic speech recognition (ASR)
+    
+    // print data
+    text("rms: " + rms,20,20);
+    text("zcr: " + zcr,20,40);
+    text("energy :" + energy,20,60);
+    text("spectralCentroid: " + spectralCentroid,20,80);
+    text("spectralSpread: " + spectralSpread,20,100);
+    text("spectralRolloff: " + spectralRolloff,20,120);
+    text("mfcc (length=13) : \n" + mfcc,20,140);
+
+    // save data and calculate short-term statistics
+    stFeatureSave(); // save stFeatures in stData only when rms is large enough
+} // end show function
+
+function make_decision()
+{
+    for (var i = 0; i < num_features; i++) 
+    {
+        var basis = i * num_statistics;
+        mtFeatureExtraction(stData[i],i,basis);
+        // normalized the mid-term features, I have num_statistics iterations
+        for (var j = 0; j < num_statistics; j++) 
+        {
+            //mtColCount th column of mtData is normailized
+            mtData_normalized[basis+j] =  (mtData[basis+j][mtColCount] - normalize_mean[basis+j]) /normalize_std[basis+j];
+        }
+    }
+    
+    // decision speech/non-speech according to audio mtFeatures
+    KNN_decision(); // if mean(rms) < threshold, then decide it is 'noise' direcrly
+
+    // show me decision
+    timeCount ++ ; 
+    console.log("decision for " + timeCount + " s, score: " + score); 
+
+    // renew related parameters
+    stData= Create2DArray(num_features); // blank stData
+    stColCount = 0; //restore stColCount
+    mtColCount++; // add another column for mtData
+}
+
+function KNN_decision() //loadData has been normalized
+{
+    // max(rms) without normailization
+    var rms_origin = mtData_normalized[0] * normalize_std[0] + normalize_mean[0];   
+    if (rms_origin < threshold)   // max(rms) is too low, silence
+    {
+        score = 0;
+        label_text('speech_score', score.toFixed(2)) 
+        label_text('speech_non_speech', 'noise')
+    }
+    else
+    {
+        score = 0; // make sure to initialize score
+        for (var i = 0; i < rowCount; i++) // i means ith wav file or ith label
+        {
+          dist[i] = 0; // initialize distance as 0
+          for (var j = 0; j < colCount; j++) // j means jth feature
+          {
+              dist[i] = dist[i] + Math.pow ( mtData_normalized[j] - loadData[i][j] , 2);
+          }
+        dist[i] = Math.pow(dist[i], 0.5);
+        }
+
+        // Sort index according to L2 distance
+        for (var i = 0; i < rowCount; ++i) 
+        {
+              indices[i] = i; // renew indices
+        }
+        
+        indices.sort(function (a, b) { return dist[a] < dist[b] ? -1 : dist[a] > dist[b] ? 1 : 0; });// if dist[a]<dist[b], return -1, and so on...
+
+        // calculate score
+        for (var i = 0; i < k; i++) 
+        {
+              score = score + labels[indices[i]]; // add the label with ith largest indice
+        }
+        score = score / k;
+
+        label_text('speech_score', score.toFixed(2)) 
+
+        // make decision
+        if (score <=0.5)
+        {
+          label_text('speech_non_speech', 'noise')
+        }
+        else
+        {
+          label_text('speech_non_speech', 'speech')
+        }
+    }
+}
+
+function stFeatureSave()
+{ // the sequence must exactly the same as show()
+        stData[0][stColCount] = rms;
+        stData[1][stColCount] = zcr;
+        stData[2][stColCount] = energy;
+        stData[3][stColCount] = spectralCentroid;
+        stData[4][stColCount] = spectralSpread;
+        stData[5][stColCount] = mfcc[0];
+        for (var i = 6; i < num_features; i++) {
+             stData[i][stColCount] = mfcc[i-6];
+        }
+        stColCount++;
+}
+
+function mtFeatureExtraction(stFeature,index)
+{ // get max, min, mean, median, std, std / mean
+        mtData[index*num_statistics][mtColCount] =  math.max(stFeature) ; // cannot use push
+        mtData[index*num_statistics+1][mtColCount] =  math.min(stFeature) ;
+        mtData[index*num_statistics+2][mtColCount] =  math.mean(stFeature);
+        mtData[index*num_statistics+3][mtColCount] =  math.median(stFeature); 
+        mtData[index*num_statistics+4][mtColCount] =  math.std(stFeature);
+        mtData[index*num_statistics+5][mtColCount] =  
+                                    mtData[4][mtColCount]  / (mtData[2][mtColCount] + 1e-10);
+}
+
+function loadcsv(table1, table2)
+{
+  // show me infomation of csv files
+  rowCount = table1.getRowCount(); // # of features in csv file 1
+  colCount = table1.getColumnCount(); // # of files in csv file 1
+  print('One csv file data size: ' + rowCount  + ' total rows ' + colCount + ' total columns');
+  
+  // pass data to loadData and labels
+  for (var i = 0; i < colCount; i++) 
+  {
+    labels.push(1); // label 1-speech
+  }
+  for (var i = 0; i < colCount; i++) 
+  {
+    labels.push(0); // label 0-noise
+  }
+
+  // get mean and std of each feature
+  var tempData = table1.getArray();
+  tempData.concat(table2.getArray());
+  normalize_mean = new Array(rowCount); // # of rows in the tempData matrix
+  normalize_std = new Array(rowCount); // # of rows in the tempData matrix
+  for (var i = 0; i < rowCount; i++) 
+  {
+    normalize_mean[i] = math.mean(tempData[i]);
+    normalize_std[i]  = math.std(tempData[i]);
+  }
+
+  loadData = transpose(table1.getArray()); // each row is a file's features
+  loadData = loadData.concat(transpose(table2.getArray())); // concate table2 with table 1
+
+  //renew size of matrix
+  rowCount = loadData.length;
+  colCount = loadData[0].length;
+  print('After concatenante, matrix size ' + rowCount  + ' total rows ' + colCount + ' total columns')
+
+  // normalize loadData
+  for (var i = 0; i < rowCount; i++) 
+  {
+    for (var j = 0; j < colCount; j++) 
+    {
+      loadData[i][j] = (loadData[i][j]-normalize_mean[j])/normalize_std[j]; // each column is a feature
+    }
+  }
+}
+
+function exportArray() 
+{
+    save(mtData, 'mtData.txt')
+}
+
+function Create2DArray(rows) 
+{ // you only need to care about # of rows, create a 2D array
+  var arr = [];
+  for (var i=0;i<rows;i++) 
+  {
+     arr[i] = [];
+  }
+  return arr;
+}
+
+// https://stackoverflow.com/questions/17428587/transposing-a-2d-array-in-javascript
+function transpose(matrix) { // transpose a 2D array
+  return matrix[0].map((col, i) => matrix.map(row => row[i]));
+}
+
+function label_text(ID, text)
+{
+    var elem = document.getElementById(ID);
+    elem.style.fontSize = "xx-large";
+    elem.innerHTML = text;
+}
+
+function label_text(ID, text)
+{
+    var elem = document.getElementById(ID);
+    elem.style.fontSize = "xx-large";
+    elem.innerHTML = text;
+}
+
+function timeClock() {
+  var today = new Date();
+  var h = today.getHours();
+  var m = today.getMinutes();
+  var s = today.getSeconds();
+  // add a zero in front of numbers<10
+  m = checkTime(m);
+  s = checkTime(s);
+  document.getElementById("txt").innerHTML = "current time: " + h+ ":" + m + ":" + s;
+  t = setTimeout(function(){ timeClock() }, 500);
+}
+
+function checkTime(i) {
+  if (i<10) {
+    i = "0" + i;
+  }
+  return i;
+}
+
+// decision rules that I do not use
+function Tree_decision2()
+{
+    console.log("called Tree_decision2");
+        if (mtData[85][mtColCount] > -5.501)
+        {
+            if (mtData[60][mtColCount] < 1.993)
+            {
+                label_text('speech_non_speech', 'speech');
+            }    
+            else 
+            {
+                label_text('speech_non_speech', 'noise');
+            }
+        } 
+        else 
+        {
+            if (mtData[69][mtColCount] > -0.5978)
+            {
+                label_text('speech_non_speech', 'speech');
+            }
+            else
+            {
+                label_text('speech_non_speech', 'noise');
+            }
+        }
+}
+
+</script>
+
+</body>
+</html>
