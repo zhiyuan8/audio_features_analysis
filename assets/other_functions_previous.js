@@ -1,73 +1,68 @@
-// function for pitch is inspired by
-// https://github.com/therewasaguy/p5-music-viz/blob/gh-pages/demos/06c_autoCorrelation_PitchTrack/sketch.js
-function extractPitch (timeDomainBuffer, nSamples, sample_rate)
+function plot_all(spectrum,waveform,output_features)
 {
-    // pre-normalize the input buffer
-    var MaxTemp = math.max(timeDomainBuffer) // save the maximal value in case of function call in for-loop
-    for (var i=0; i<nSamples; i++)
+    // Grayscale integer value 
+    background(50);
+    noStroke();
+    fill(0,255,0); // spectrum is green
+    for (var i = 0; i< spectrum.length; i++)
     {
-        timeDomainBuffer[i] = timeDomainBuffer[i] / MaxTemp;
+        var x = map(i, 0, spectrum.length, 0, width);
+        //map(value, start1, stop1, start2, stop2, [withinBounds])
+        //value Number: the incoming value to be converted
+        //start1  Number: lower bound of the value's current range
+        //stop1 Number: upper bound of the value's current range
+        //start2  Number: lower bound of the value's target range
+        //stop2 Number: upper bound of the value's target range
+        var h = -height + map(spectrum[i], 0, 255, height, 0);
+        rect(x, height, width / spectrum.length,5*h )
+        //rect(x, y, w, h) 
+        //x Number: x-coordinate of the rectangle.
+        //y Number: y-coordinate of the rectangle.
+        //w Number: width of the rectangle.
+        //h Number: height of the rectangle.
     }
+
+    noFill();
+    strokeWeight(4);
+    beginShape();
+    stroke(255,0,0); // waveform is red
+    strokeWeight(1);
+    for (var i = 0; i< waveform.length; i++)
+    {
+        var x = map(i, 0, waveform.length, 0, width);
+        var y = map( waveform[i], -1, 1, 0, height);
+        vertex(x,y);
+    }
+    endShape();
+
+    // print out results
+    fill(155);
+    textSize(15);
+    text("Time Domain Features" ,20,20);
+    text("Frequency Domain Features" ,200,20);
+    text("First 4 MFCC Features (13 MFCC in total)" ,600,20);
     
-    // Compute autoCorrelation 
-    var autoCorrBuffer = new Array(nSamples);
-    for (var lag = 0; lag < nSamples; lag++)
-    {
-        var sum = 0; 
-        for (var index = 0; index < nSamples-lag; index++)
-        {
-          var indexLagged = index+lag;
-          var sound1 = timeDomainBuffer[index];
-          var sound2 = timeDomainBuffer[indexLagged];
-          var product = sound1 * sound2;
-          sum += product;
-        }
-        // average to a value between -1 and 1
-        autoCorrBuffer[lag] = sum/nSamples;
-    }
+    fill(255);
+    text("rms: " + output_features[0].toFixed(2) ,20,40);
+    text("zcr: " + output_features[1] ,20,60);
+    text("energy: " + output_features[2].toFixed(2),20,80);
+    text("energyEntropy: " + output_features[3].toFixed(2),20,100);
 
-    // normalize the output buffer
-    MaxTemp = math.max(autoCorrBuffer)
-    for (var i=0; i<nSamples; i++)
-    {
-      autoCorrBuffer[i] = autoCorrBuffer[i] / MaxTemp;
-    }
+    text("spectralCentroid: " + output_features[4].toFixed(2) ,200,40);
+    text("spectralSpread: " + output_features[5].toFixed(2) ,200,60);
+    text("spectralEntropy: " + output_features[6].toFixed(2),200,80);
+    text("spectralFlatness: " + output_features[7].toFixed(2),200,100);
+    text("spectralSlope: " + output_features[8].toFixed(2),400,40);
+    text("spectralRolloff: " + output_features[9].toFixed(2),400,60);
+    text("spectralSkewness: " + output_features[10].toFixed(2),400,80);
+    text("spectralFlux: " + output_features[11].toFixed(2),400,100);
 
-    // Calculate the fundamental frequency of a buffer  by finding the peaks, and counting the distance
-// between peaks in samples, and converting that number of samples to a frequency value.
-    var valOfLargestPeakSoFar = 0;
-    var indexOfLargestPeakSoFar = -1;
-    var valL, valC, valR,  bIsPeak;
+    text("MFCC_1: " + output_features[4].toFixed(2) ,600,40);
+    text("MFCC_2: " + output_features[5].toFixed(2) ,600,60);
+    text("MFCC_3: " + output_features[6].toFixed(2),600,80);
+    text("MFCC_4: " + output_features[7].toFixed(2),600,100);
 
-    for (var index = 1; index < nSamples; index++)
-    {
-      valL = autoCorrBuffer[index-1];
-      valC = autoCorrBuffer[index];
-      valR = autoCorrBuffer[index+1];
-
-      bIsPeak = ((valL < valC) && (valR < valC));
-      if (bIsPeak)
-      {
-          if (valC > valOfLargestPeakSoFar)
-          {
-            valOfLargestPeakSoFar = valC;
-            indexOfLargestPeakSoFar = index;
-          }
-      }
-    }
-  
-    var distanceToNextLargestPeak = indexOfLargestPeakSoFar - 0;
-
-    if (distanceToNextLargestPeak == -1)
-    {
-        distanceToNextLargestPeak = 1; // fail to find a peak, then pitch = frequency of audio itself
-    }
-      // convert sample count to frequency
-    var fundamentalFrequency = sample_rate / distanceToNextLargestPeak;
-    return round(fundamentalFrequency); // fundamental frequency is a integer
 }
-
-
 
 function extractZcr(windows)
 {
@@ -118,18 +113,6 @@ function extractSpectralFlux (windowFFTPrev, windowFFT)
   return (F);
 }
 
-function extractChangeRate(stFeature)
-{
-    var step =  ( buffer_size / sample_rate );
-    var len =  stFeature.length;
-    var result = 0;
-    for (var i = 1; i < len; i++)
-    {
-      result = math.abs(stFeature[i] - stFeature[i-1]) / step + result; // (y-x) / x 
-    }
-    return (result);
-}
-
 function mtFeatureExtraction(stFeature,basis)
 { // get max, min, mean, median, std, std / mean
         mtData[basis][mtColCount] =  math.max(stFeature) ; // cannot use push
@@ -139,10 +122,8 @@ function mtFeatureExtraction(stFeature,basis)
         mtData[basis+4][mtColCount] =  math.std(stFeature);
         mtData[basis+5][mtColCount] =  
                     mtData[basis+2][mtColCount]  / (mtData[basis+4][mtColCount] + 1e-20);// mean / std
-        mtData[basis+6][mtColCount] = mtData[basis][mtColCount] - mtData[basis+1][mtColCount]; //range 
-        mtData[basis+7][mtColCount] = extractChangeRate(stFeature);
-        mtData[basis+8][mtColCount] = extractZcr (stFeature);
-        mtData[basis+9][mtColCount] = extractEntropy (stFeature , 4);
+        mtData[basis+6][mtColCount] = extractZcr (stFeature);
+        mtData[basis+7][mtColCount] = extractEntropy (stFeature , 4);
 }
 
 function loadcsv(table1, table2)
@@ -256,45 +237,9 @@ function timeClock() {
   t = setTimeout(function(){ timeClock() }, 500);
 }
 
-function checkTime(i) 
-{
+function checkTime(i) {
   if (i<10) {
     i = "0" + i;
   }
   return i;
-}
-
-
-function plot_all(spectrum,waveform,features)
-{ 
-    background(0);
-    noStroke();
-    fill(0,255,0); // spectrum is green
-    for (var i = 0; i< spectrum.length; i++)
-    {
-        var x = map(i, 0, spectrum.length, 0, width);
-        var h = -height + map(spectrum[i], 0, 255, height, 0);
-        rect(x, height, width / spectrum.length, h )
-    }
-
-    noFill();
-    strokeWeight(4);
-    beginShape();
-    stroke(255,0,0); // waveform is red
-    strokeWeight(1);
-    for (var i = 0; i< waveform.length; i++)
-    {
-        var x = map(i, 0, waveform.length, 0, width);
-        var y = map( waveform[i], -1, 1, 0, height);
-        vertex(x,y);
-    }
-    endShape();
-
-    // print out results
-    fill(255);
-    textSize(20);
-    text("rms: " + features['rms'] ,20,20);
-    text("zcr: " + features['zcr'] ,20,40);
-    text("energy: " + features['energy'],20,60);
-    
 }
