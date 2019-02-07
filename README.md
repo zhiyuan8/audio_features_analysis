@@ -1,9 +1,14 @@
 # audio_features_analysis
 Real-time/file-based audio feature analysis written by Javascript
+The demo for real-time speech/noise classification from web microphone can be found at: https://zhiyuan8.github.io/
+Open the link and press **start**, then your audio features are drawn, and decisions are made every 1s. Press **Export Data** then mid-term features will be shown in a txt file.
 
-## My JavaScript Codes
-[Detect speech/noise by a shallow decision tree]<br/>(https://github.com/zhiyuan8/audio_features_analysis/blob/master/audio_in_developing_now.html)<br/>
-[Detec speech/noise by kNN]<br/>
-(https://github.com/zhiyuan8/audio_features_analysis/blob/master/microphone_in.html)<br/>
-[Detec speech/noise by logistic regression]<br/>
-Really bad...
+<p align="center">
+  <img src="https://github.com/zhiyuan8/audio_features_analysis/blob/master/img/screen_shot2.png" width="800" title="demo">
+</p>  
+
+### Training Data
+Audios were collected from different resources (see 'Tranining data source' at ReadMe of https://github.com/zhiyuan8/speech_detection).
+
+### Model and Performance
+The classification is based on kNN model, but more sophisticated models are being tunned now. Also, more advanced tasks are being tested now.
