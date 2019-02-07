@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<html>
+
+<head>
+
+    <title>microphone_in_and_make_decision</title>
+    <meta charset=utf-8"/>
+    <!-- scripts -->
+    <script src="assets/js/jquery.min.js"></script>
+    <script src="assets/js/FileSaver.js"></script>
+    <script src="assets/js/meyda/meyda.min.js"></script>
+    <script src="assets/js/p5/p5.min.js"></script>
+    <script src="assets/js/p5/addons/p5.dom.min.js"></script>
+    <script src="assets/js/math.js"></script>
+
+    <script src="assets/other_functions_previous.js"></script>
+    <script src="assets/models.js"></script>
+    <script src="assets/data/speech_1_24.js"></script>
+    <script src="assets/data/noise_1_24.js"></script>
+
+    <button onclick="exportArray()">Export Data</button>
+    <label id="speech_non_speech">noise</label>
+    <label id="speech_score">0</label>   
+
+</head>
+
+<body onload="timeClock()">
+    <div id="txt"></div>
+    <div id="output" width="500" height="300" style="border:1px solid #d3d3d3;"></div>
+<script>
+
+// User defined variables
+var buffer_size = 512; //Buffer size must be a power of 2, e.g. 64 or 512
+var sample_rate = 16000; //16000, 22050, 44100
+var num_features = 24; // must be consistant with "featureExtractors", length of mfcc=13
+var num_statistics = 8;// must be consistant with "mtFeatureExtraction"
+var k=10; // used in kNN model
+var kNN_feature = [85,136,71,15,39,144,44,184,183,93,37]; // what I get from python， but I decided not to use it right now
+
+// global variables
+var mtMaxCol = 100; //At most I save 100s of data
+var raw_audio, raw_FFT; //save raw audio wave and save raw FFT result 
+var raw_FFT_prev = new Array(buffer_size/2).fill(0); // used to calculate spectral flux 
+var stData = Create2DArray(num_features); // save all st-term features, # of features
+var mtData = Create2DArray(num_features*num_statistics);// save all mid-term features, # of features * # of statistics 
+var mtData_normalized = Create2DArray(num_features*num_statistics); // used in calculation
+var mtCount = 0; mtColCount = 0; stColCount =0;
+var loadData, rowCount,  colCount; // read in csv file
+var threshold = 0.002; // threshold on rms value
+var playing = false;
+var timeCount = 0;
+var myVar; // used in setInterval
+
+// variables to set properties of tags
+var opt = document.getElementById('output');
+var output_score = [];
+var  output_str = [];
+
+// variables used in classification model
+var labels = []; // 0 for noise, 1 for speech
+var score = 0; // 0: noise; 1: speech
+var dist,indices,normalize_mean,normalize_std; // used in kNN model
+// Standardization:  make features to have zero-mean and unit-variance.
+var kNN_feature= [];
+
+for (var i = 0; i < num_features*num_statistics; i++) 
+{
+   kNN_feature.push(i); // actually I used all mid-term features
+}
+
+
+
+
+navigator.getUserMedia = (
+    navigator.getUserMedia ||
+    navigator.webkitGetUserMedia ||
+    navigator.mozGetUserMedia ||
+    navigator.msGetUserMedia
+);
+
+function preload() // data read-in
+{
+    table1 = speech_1_24; // speech,label-1
+    table2 = noise_1_24; // noise, label-0
+}
+
+function setup() {
+    // initializations
+    label_text('speech_non_speech', 'noise')
+    label_text('speech_score', '0')
+    loadcsv(table1, table2); // load 2 csv files
+
+    // set properties of myCanvas
+    opt.style.position = "absolute";
+    opt.style.left = 50 +'px';
+    opt.style.top = 380 +'px';
+
+    // canvas setup
+    createCanvas(1000, 300)
+    background(0)
+
+    // predefine 2 arrays used in kNN model
+    dist = new Array(rowCount);
+    indices = new Array(rowCount);
+
+    window.AudioContext = window.AudioContext || window.webkitAudioContext
+    var context = new AudioContext()
+    var source = null
+    var startButton = null
+    var stopButton = null
+
+    // get microphone
+    navigator.getUserMedia({audio:true, video:false},function(stream){
+    // get audio stream data
+    source = context.createMediaStreamSource(stream)
+
+    // analyser setup
+    meydaAnalyzer = Meyda.createMeydaAnalyzer({
+            'audioContext':context,
+            'source':source,
+            'bufferSize':buffer_size,// Buffer Size tells Meyda how often to check the audio feature, and is measured in Audio Samples. Usually there are 44100 Audio Samples in 1
+  // second, which means in this case Meyda will calculate the level about 86
+  // (44100/512) times per second.
+            'sampleRate':sample_rate,
+            "featureExtractors": ['rms','zcr','energy', 'spectralCentroid','spectralFlatness','spectralSlope',
+            'spectralSpread','spectralRolloff','mfcc','spectralSkewness','buffer','amplitudeSpectrum'],// define feature to extract here
+  // Finally, we provide a function which Meyda will call every time it
+  // calculates a new level. This function will be called around 86 times per
+  // second.
+            'callback':show
+        })
+
+    // buttons
+    startButton = createButton('Start')
+    startButton.mousePressed(function(){
+    context.resume(); //make it work in Firefox
+    // start audio analyzer
+    if(playing == false)
+    {
+                meydaAnalyzer.start() 
+                playing = true
+                startButton.html('Pause')
+                startButton.style('background:#aa0')
+                myVar = setInterval( make_decision, 1000 ); 
+                // make_decision is a function that I will call
+    }
+    else
+    {
+                //meydaAnalyzer.stop()
+                playing = false
+                startButton.html('Start')
+                startButton.style('background:#aaf')
+                clearInterval(myVar); // stop setInterval
+    }
+    })
+
+    },function(error){
+        console.log(error)
+    })
+}
+
+function show(features)
+{ // show function was called each time data was updated
+    // show function was called each time data was updated
+  // save raw data
+  if (playing == true) // only if I am speaking then I will document data
+  {
+    raw_audio = features['buffer'] ;
+    raw_FFT = Array.from(features['amplitudeSpectrum']) ; // remember to change to normal array
+  
+    // save short-term features
+    stData[0][stColCount] = features['rms'] ;// [0,1], 0.0 is not loud and 1.0 is very loud.
+    stData[1][stColCount] = features['zcr'] ; // Range: [0, ((buffer size / 2) - 1)]
+    stData[2][stColCount] = features['energy'] ; // Range: [0 - bufferSize] / bufferSize
+    stData[3][stColCount] = extractEntropy (raw_audio , 10);  //energy entropy
+    stData[4][stColCount] = features['spectralCentroid'] ; // An indicator of the “brightness” of a given sound// [0 - half of the FFT size]
+    stData[5][stColCount] = features['spectralSpread'] ;// Can be used to differentiate between noisy (high spectral spread) and pitched sounds (low spectral spread).
+    stData[6][stColCount] = extractEntropy (raw_FFT , 10); //spectral entropy
+    stData[7][stColCount] = features['spectralFlatness'] ; // Range: 0.0 - 1.0 where 0.0 is not flat and 1.0 is very flat.
+    stData[8][stColCount] = features['spectralSlope'] ;
+    stData[9][stColCount] = features['spectralRolloff'] ;
+    stData[10][stColCount] = features['spectralSkewness'] ;
+    stData[11][stColCount] = extractSpectralFlux (raw_FFT_prev, raw_FFT);  //starts at 0.0. This has no upper range. Often corresponds to perceptual “roughness” of a sound. Can be used for example, to determine the timbre of a sound.
+    
+    for (var i = 12; i < num_features; i++) 
+    {
+           stData[i][stColCount] = features['mfcc'][i-12]; //Often used to perform voice activity detection (VAD) prior to automatic speech recognition (ASR).
+    }
+
+    var output_features = [];
+    for (var i = 0; i < num_features; i++) 
+    {
+           output_features.push(stData[i][stColCount])
+    }
+
+    // plot required data, renewed every time new data is sampled
+    plot_all(raw_FFT,raw_audio,output_features)
+
+    // update parameters
+    stColCount++;
+    raw_FFT_prev = raw_FFT ;
+  }
+} // end show function
+
+function make_decision()
+{
+    for (var i = 0; i < num_features; i++) 
+    {
+        var basis = i * num_statistics;
+        mtFeatureExtraction(stData[i],basis); // get mid-term features
+        // normalized the mid-term features, I have num_statistics iterations
+        for (var j = 0; j < num_statistics; j++) 
+        {
+            //mtColCount th column of mtData is normailized
+            mtData_normalized[basis+j] =  (mtData[basis+j][mtColCount] - normalize_mean[basis+j]) /normalize_std[basis+j];
+        }
+    }
+
+    // decision speech/non-speech according to audio mtFeatures
+    KNN_decision(mtData_normalized, kNN_feature,output_score); 
+    // if mean(rms) < threshold, then decide it is 'noise' direcrly
+    
+    // compile the output string with line breaks
+    if (output_score[timeCount] <= 0.5)
+    {
+        output_str.push(' Time= ' + timeCount + 's , Decision = Noise , Score= '+ output_score[timeCount] )
+    }
+    else
+    {
+        output_str.push(' Time= ' + timeCount + 's , Decision = Speech , Score= '+ output_score[timeCount])
+    }
+
+    // print out decisions in opt Canvas
+    opt.innerHTML =  output_str.join('</br>');
+
+    if (timeCount % 15 == 0)
+    {
+        output_str = []; //clear output_str every 15 s
+    }
+
+    // renew timeCount
+    timeCount ++ ; 
+
+    // renew related parameters
+    stData= Create2DArray(num_features); // blank stData
+    stColCount = 0; //restore stColCount
+    mtColCount++; // add another column for mtData
+
+    // renew mtData if mtColCount is too large
+    if (mtColCount>mtMaxCol)
+    {
+      mtColCount = 0;
+      mtData = Create2DArray(num_features*num_statistics);
+      console.log("mtData cleared")
+    }
+}
+
+</script>
+
+</body>
+</html>
