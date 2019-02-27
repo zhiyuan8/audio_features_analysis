@@ -4,7 +4,7 @@
 </p>  
 
 Real-time audio feature analysis written by Javascript    
-The demo for real-time speech/noise classification from web microphone can be found at: https://zhiyuan8.github.io/  
+The demo for real-time speech/noise classification from web microphone can be found at: https://zhiyuan8.github.io/speech-noise-demo/  
 Open the link and press **start**, then your audio features are drawn, and decisions are made every 1s. Press **Export Data** then mid-term features will be shown in a txt file.  
 
 ### Training Data
