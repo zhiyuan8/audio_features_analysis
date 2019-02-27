@@ -22,15 +22,15 @@
     <audio
            crossorigin="anonymous"
            id="audio"
-           src="audios/noise_append.wav">
+           src="audios_repo_raw/Toronto emotional speech set (TESS) combined/Younger talker_Disgust.wav">
     </audio>
 
 <script>
 // User defined variables
 var buffer_size = 512; //Buffer size must be a power of 2, e.g. 64 or 512
 var sample_rate = 16000; //16000, 22050, 44100
-var num_features = 24; // must be consistant with "featureExtractors", length of mfcc=13
-var num_statistics = 8;// must be consistant with "mtFeatureExtraction"
+var num_features = 27; // must be consistant with "featureExtractors", length of mfcc=13
+var num_statistics = 10;// must be consistant with "mtFeatureExtraction"
 
 // global variables
 var path1 = 'speech.csv'; // speech label = 1
@@ -84,7 +84,7 @@ function main()
   // (44100/2048=21.5) times per second.
         "sampleRate":sample_rate,
         "featureExtractors": ['rms','zcr','energy', 'spectralCentroid','spectralFlatness','spectralSlope',
-            'spectralSpread','spectralRolloff','mfcc','spectralSkewness','buffer','amplitudeSpectrum'],
+            'spectralSpread','spectralRolloff','mfcc','spectralSkewness','spectralKurtosis','buffer','amplitudeSpectrum'],
         "callback": show
 });
     if ( playing == false )
@@ -109,7 +109,7 @@ function show(features)
 { // show function was called each time data was updated
 	// save raw data
 	raw_audio = features['buffer'] ;
-	raw_FFT = Array.from(features['amplitudeSpectrum']) ; // remember to change to normal array
+	raw_FFT = Array.from(features['amplitudeSpectrum']) ; // remember to change to normal array from 32Float array
 	
 	// save short-term features
 	stData[0][stColCount] = features['rms'] ;// [0,1], 0.0 is not loud and 1.0 is very loud.
@@ -123,15 +123,18 @@ function show(features)
 	stData[8][stColCount] = features['spectralSlope'] ;
 	stData[9][stColCount] = features['spectralRolloff'] ;
 	stData[10][stColCount] = features['spectralSkewness'] ;
-	stData[11][stColCount] = extractSpectralFlux (raw_FFT_prev, raw_FFT);  //starts at 0.0. This has no upper range. Often corresponds to perceptual “roughness” of a sound. Can be used for example, to determine the timbre of a sound.
-    for (var i = 12; i < num_features; i++) 
+    stData[11][stColCount] = features['spectralKurtosis'] ;
+	stData[12][stColCount] = extractSpectralFlux (raw_FFT_prev, raw_FFT);  //starts at 0.0. This has no upper range. Often corresponds to perceptual “roughness” of a sound. Can be used for example, to determine the timbre of a sound.
+    stData[13][stColCount] = extractPitch (raw_audio, buffer_size, sample_rate); // get fundermental frequency of an audio
+    for (var i = 14; i < num_features; i++) 
     {
-           stData[i][stColCount] = features['mfcc'][i-12]; //Often used to perform voice activity detection (VAD) prior to automatic speech recognition (ASR).
+           stData[i][stColCount] = features['mfcc'][i-14]; //Often used to perform voice activity detection (VAD) prior to automatic speech recognition (ASR).
     }
 
     // print out results
     background(245) // renew background
     text("rms: " + stData[0][stColCount],20,20);
+    text("pitch: " + stData[13][stColCount],20,40);
 
     // update parameters
     stColCount++;
