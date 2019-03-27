@@ -1,6 +1,6 @@
 # audio_features_analysis
 <p align="center">
-  <img src="https://github.com/zhiyuan8/audio_features_analysis/blob/master/img/screen_shot2.png" width="800" title="demo">
+  <img src="https://github.com/zhiyuan8/audio_features_analysis/blob/master/screen_shot2.png" width="800" title="demo">
 </p>  
 
 Real-time audio feature analysis written by Javascript    
